@@ -21,8 +21,8 @@ import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-model_pth = r"C:\Users\User-1\Desktop\Data\detectron2\instance_segmentation\output\instance_segmentation\new_model_v3_banana\model_final.pth"
-threshold = 0.8
+model_pth = r"C:\Users\User-1\Desktop\Data\detectron2\instance_segmentation\output\instance_segmentation\model_final.pth"
+threshold = 0.2
 
 def initialize_detectron2(model,thrsh):
     # Set your config file path
@@ -112,16 +112,16 @@ def generate_vector_bbox(img_path,out_dir):
 
     # Create a list of geo coordinates
     geometries = []
+    sc = []
 
     for i in range(len(detections)):
         detection = detections[i]
         class_id = detection.pred_classes.item()  # Get the class ID of the detection
-        if class_id == 1:  # Assuming class one is indexed as 1
+        if class_id == 0:  # Assuming class one is indexed as 1
             bbox = detection.pred_boxes.tensor[0].tolist()  # Get bounding box coordinates
             score = detections.scores[i].item() 
             out = pixel_to_geo_polygon(img_path,bbox)
-            # print(score)
-            # print(out)
+            sc.append(score)
             
             # Add the bounding box information to the DataFrame
             geometries.append(out)
@@ -131,6 +131,8 @@ def generate_vector_bbox(img_path,out_dir):
 
         # Create a GeoDataFrame from the GeoSeries
         gdf = gpd.GeoDataFrame(geometry_series, columns=['geometry'])
+
+        gdf['score'] = sc
 
         out_file_name = os.path.basename(img_path)
 
@@ -145,3 +147,42 @@ def generate_shapefiles(in_files,out_results):
                     file_path = os.path.join(in_files,files)
                     generate_vector_bbox(file_path,out_results)
 
+def remove_overlapping_bbox(input_shp,out_dir):
+
+    # Load your input shapefile
+    shapefile = gpd.read_file(input_shp)
+
+    # Initialize a list to store the dissolved polygons
+    dissolved_geometries = []
+
+    # Iterate through each feature and dissolve overlapping polygons if overlap >= 70%
+    for idx, row in shapefile.iterrows():
+        geometry = row['geometry']
+        dissolved = False
+        
+        # Check if the current polygon overlaps with any existing dissolved polygons
+        for dissolved_geometry in dissolved_geometries:
+            
+            # Calculate the intersection area between the current polygon and dissolved polygon
+            intersection_area = geometry.intersection(dissolved_geometry).area
+            
+            # Calculate the proportion of overlap
+            overlap_proportion = intersection_area / geometry.area
+
+            # If overlap >= 70%, dissolve the polygons
+            if overlap_proportion >= 0.2:
+                geometry = geometry.union(dissolved_geometry)
+                dissolved = True
+                break
+
+            # If the polygon was not dissolved, add it to the list of dissolved geometries
+        if not dissolved:
+            dissolved_geometries.append(geometry)
+
+    # Create a new GeoDataFrame from the dissolved geometries
+    dissolved_gdf = gpd.GeoDataFrame({'geometry': dissolved_geometries}, crs=shapefile.crs)
+
+    out_file = os.path.join(out_dir,'merge_-without_overlap.shp')
+
+    # Save the dissolved result to a new shapefile
+    dissolved_gdf.to_file(out_file)
